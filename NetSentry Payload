@@ -1,7 +1,7 @@
 bash
 #!/bin/bash
 # Title: NetSentry — Multi-Client DHCP Intelligence Collector
-# Author: YourHandle
+# Author: D-L3aN
 # Description: Hosts a DHCP server and continuously captures hostname,
 #              IP, MAC, MAC vendor (OUI), and lease time for every
 #              client that connects. Displays a live counter on screen
