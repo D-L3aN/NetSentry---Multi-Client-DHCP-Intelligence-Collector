@@ -1,0 +1,177 @@
+bash
+#!/bin/bash
+# Title: NetSentry — Multi-Client DHCP Intelligence Collector
+# Author: YourHandle
+# Description: Hosts a DHCP server and continuously captures hostname,
+#              IP, MAC, MAC vendor (OUI), and lease time for every
+#              client that connects. Displays a live counter on screen
+#              and writes a timestamped log to /root/loot/. Runs until
+#              the switch is flipped back to Arming Mode.
+# Usage: Run payload. Plug Shark Jack into target switch/port. Each
+#        client that obtains a DHCP lease is logged. Flip switch to
+#        Arming Mode to stop and retrieve loot via SSH.
+# Target: Shark Jack Display
+# Category: recon
+# Props: Inspired by "Simple Client Info" by Hak5 (Darren Kitchen)
+
+# ============================================================
+#  CONFIGURATION
+# ============================================================
+LOOT_DIR="/root/loot"
+LOG_FILE="${LOOT_DIR}/netsentry_$(date +%Y%m%d_%H%M%S).log"
+SCREEN_REFRESH=2          # seconds between screen updates
+VENDOR_LOOKUP=true        # set false to skip OUI lookups (faster)
+
+# ============================================================
+#  INITIALIZATION
+# ============================================================
+LED SETUP
+SCREEN_WRITE "NetSentry"
+SCREEN_WRITE "Starting DHCP..."
+SCREEN_WRITE ""
+
+# Ensure loot directory exists
+mkdir -p "$LOOT_DIR"
+
+# Initialize log file with header
+{
+    echo "=============================================="
+    echo " NetSentry Recon Log"
+    echo " Started: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo " Device:  $(hostname)"
+    echo "=============================================="
+    echo ""
+} > "$LOG_FILE"
+
+# Counter for clients seen
+CLIENT_COUNT=0
+
+# ============================================================
+#  HELPER FUNCTIONS
+# ============================================================
+
+# Look up MAC vendor from OUI (first 3 bytes)
+lookup_vendor() {
+    local mac="$1"
+    local oui
+    oui=$(echo "$mac" | tr -d ':' | cut -c1-6 | tr '[:lower:]' '[:upper:]')
+    
+    # Try local IEEE OUI database if present
+    if [ -f /usr/share/ieee-data/oui.txt ]; then
+        grep -i "^${oui}" /usr/share/ieee-data/oui.txt 2>/dev/null | \
+            head -1 | cut -f3- | sed 's/^[[:space:]]*//'
+    else
+        echo "unknown"
+    fi
+}
+
+# Format the on-screen display
+update_screen() {
+    SCREEN_WRITE "NetSentry — $(date '+%H:%M:%S')"
+    SCREEN_WRITE "Clients: $CLIENT_COUNT"
+    SCREEN_WRITE "Last: $LAST_HOSTNAME"
+    SCREEN_WRITE "IP:   $LAST_IP"
+    SCREEN_WRITE "MAC:  $LAST_MAC"
+    SCREEN_WRITE ""
+    SCREEN_WRITE "Flip switch to stop"
+}
+
+# Log one client record
+log_client() {
+    local hostname="$1"
+    local ip="$2"
+    local mac="$3"
+    local vendor="$4"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+
+    {
+        echo "----------------------------------------------"
+        echo "Client #${CLIENT_COUNT}"
+        echo "  Time     : ${timestamp}"
+        echo "  Hostname : ${hostname}"
+        echo "  IP       : ${ip}"
+        echo "  MAC      : ${mac}"
+        echo "  Vendor   : ${vendor}"
+        echo "----------------------------------------------"
+        echo ""
+    } >> "$LOG_FILE"
+}
+
+# ============================================================
+#  MAIN COLLECTION LOOP
+# ============================================================
+
+# Set up DHCP server mode
+SCREEN_WRITE "Waiting for link..."
+NETMODE DHCP_SERVER
+WAIT_FOR_LINK
+
+LED ATTACK
+SCREEN_WRITE "DHCP server active"
+SCREEN_WRITE "Listening for clients..."
+
+LAST_HOSTNAME="—"
+LAST_IP="—"
+LAST_MAC="—"
+
+# Continuous capture loop
+while true; do
+    # Check switch state — exit cleanly if flipped to Arming Mode
+    SWITCH=$(GET_SWITCH 2>/dev/null)
+    if [ "$SWITCH" = "ARMING" ]; then
+        break
+    fi
+
+    # Wait for a client to obtain a lease
+    if WAIT_FOR_CLIENT; then
+        CLIENT_COUNT=$((CLIENT_COUNT + 1))
+        
+        # Capture client details from Shark Jack environment variables
+        LAST_HOSTNAME="${CLIENT_HOSTNAME:-unknown}"
+        LAST_IP="${CLIENT_IP:-unknown}"
+        LAST_MAC="${CLIENT_MAC:-unknown}"
+        
+        # Optional vendor lookup
+        VENDOR="skipped"
+        if [ "$VENDOR_LOOKUP" = "true" ]; then
+            VENDOR=$(lookup_vendor "$LAST_MAC")
+        fi
+        
+        # Log to file
+        log_client "$LAST_HOSTNAME" "$LAST_IP" "$LAST_MAC" "$VENDOR"
+        
+        # Update screen
+        update_screen
+        
+        # Brief LED pulse to indicate capture
+        LED G SOLID
+        sleep 0.3
+        LED ATTACK
+    fi
+    
+    # Small sleep to prevent tight loop
+    sleep "$SCREEN_REFRESH"
+done
+
+# ============================================================
+#  SHUTDOWN
+# ============================================================
+LED FINISH
+
+# Write summary to log
+{
+    echo "=============================================="
+    echo " Session Summary"
+    echo " Ended:   $(date '+%Y-%m-%d %H:%M:%S')"
+    echo " Clients: ${CLIENT_COUNT}"
+    echo " Log:     ${LOG_FILE}"
+    echo "=============================================="
+} >> "$LOG_FILE"
+
+# Final screen display
+SCREEN_WRITE "NetSentry Complete"
+SCREEN_WRITE "Clients: $CLIENT_COUNT"
+SCREEN_WRITE ""
+SCREEN_WRITE "Log saved to:"
+SCREEN_WRITE "$(basename $LOG_FILE)"
